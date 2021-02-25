@@ -2,7 +2,7 @@
 A Cloud Formation template for Palo Alto Networks firewall in AWS.
 
 ## Purpose of the Template
-The purpose is of this template is to build an AWS VPC with Web resources protected by a Palo Alto Networks firewall instance.
+The purpose of this template is to build an AWS VPC with Web resources protected by a Palo Alto Networks firewall instance.
 The templates include the creation of the following components without any need for you to create them  manualy in the AWS console:
 - VPC
 - Internet Gateway
