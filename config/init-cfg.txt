@@ -1,0 +1,2 @@
+type=dhcp-client
+hostname=pan-fw-aws

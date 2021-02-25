@@ -1,0 +1,438 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Install a WebServer in a DMZ network reachable from the internet & protected by a Palo Alto Networks Firewall.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Choose the key for SSH into the Firewall
+  LinuxAMI: 
+    Default: ami-0915bcb5fa77e4892
+    Type: String
+    Description: Choose the correct AMI for the LINUX WEB Server in the DMZ. 
+  FirewallAMI:
+    Default: ami-0abc61a0479de46c2
+    Type: String
+    Description: Choose the correct AMI for the Palo Alto Networks Firewall
+  BootstrapS3BucketName:
+    Default: pan-two-tier-standalone
+    Type: String
+    Description: Provide the name of the PUBLIC bucket where the bootstrap files are located.
+
+Resources:
+
+  #VPC Creation
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value:  PAN-VPC
+        
+  #Internet Gateway Creation   
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+    Properties:
+      Tags:
+      - Key: Name
+        Value: PAN-IGW
+  
+  #Internet Gateway attachment to VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  #Security Group allow ANY
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Allow everything in and out.
+      SecurityGroupIngress:
+      - IpProtocol: -1
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: -1
+        CidrIp: 0.0.0.0/0 
+      Tags:
+      - Key: Name
+        Value: PAN-ALLOW-ALL-SG
+
+  #Network NACL Bundle
+  NACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+       VpcId: !Ref VPC
+       Tags:
+       - Key: Name
+         Value: PAN-ALLOW-ALL-NACL
+
+  #Network NACL - Allow ANY IN
+  NACLInboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    DependsOn: NACL
+    Properties:
+       NetworkAclId:
+         Ref: NACL
+       RuleNumber: 100
+       Protocol: -1
+       RuleAction: allow
+       CidrBlock: 0.0.0.0/0
+  
+  #Network NACL - Allow ANY OUT
+  NACLOutboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    DependsOn: NACL
+    Properties:
+       NetworkAclId:
+         Ref: NACL
+       RuleNumber: 100
+       Protocol: -1
+       Egress: true
+       RuleAction: allow
+       CidrBlock: 0.0.0.0/0
+      
+  #Public Subnet Creation
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      CidrBlock: 172.31.3.0/24
+      AvailabilityZone: us-east-1a   
+      Tags:
+      - Key: Name
+        Value: PAN-PUBLIC-SUBNET
+
+   #Public Subnet NACL Association
+  PublicNACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    DependsOn:
+    - PublicSubnet
+    - NACL
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      NetworkAclId: !Ref NACL
+        
+  #Public Routing Table Creation      
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: PAN-PUBLIC-RT
+  
+  #Public Default Route Creation   
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway  
+
+  #Public Subnet attachment to Public Routing Table
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  #Public EIP Creation  
+  PublicEIP: 
+    Type: AWS::EC2::EIP
+    Properties: 
+      Domain: vpc
+      Tags: 
+      - Key: Name
+        Value: PAN-PUBLIC-EIP
+
+  #Public ENI Creation  
+  PublicENI:
+    Type: AWS::EC2::NetworkInterface
+    DependsOn: SecurityGroup
+    Properties:
+      SourceDestCheck: false
+      GroupSet:
+      - !Ref SecurityGroup
+      SubnetId: !Ref PublicSubnet
+      PrivateIpAddress: 172.31.3.254
+      Tags:
+      - Key: Name
+        Value: PAN-PUBLIC-ENI
+
+  #Public ENI and EIP association
+  PublicENIAssociation:
+    Type: AWS::EC2::EIPAssociation
+    DependsOn:
+    - PublicEIP
+    - PublicENI
+    Properties:
+      AllocationId: !GetAtt PublicEIP.AllocationId
+      NetworkInterfaceId: !Ref PublicENI
+
+  #MGT Subnet Creation
+  MGTSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      CidrBlock: 172.31.1.0/24
+      AvailabilityZone: us-east-1a   
+      Tags:
+      - Key: Name
+        Value: PAN-MGT-SUBNET
+
+  #MGT Subnet NACL Association
+  MGTNACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    DependsOn:
+      - MGTSubnet
+      - NACL
+    Properties:
+      SubnetId: !Ref MGTSubnet
+      NetworkAclId: !Ref NACL
+        
+  #MGT Routing Table Creation      
+  MGTRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: PAN-MGT-RT
+  
+  #MGT Default Route Creation   
+  MGTDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref MGTRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway  
+
+  #MGT Subnet attachment to Public Routing Table
+  MGTSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MGTSubnet
+      RouteTableId: !Ref MGTRouteTable   
+
+  #MGT EIP Creation  
+  MGTEIP: 
+    Type: AWS::EC2::EIP
+    Properties: 
+      Domain: vpc
+      Tags: 
+      - Key: Name
+        Value: PAN-MGT-EIP
+
+  #MGT ENI Creation  
+  MGTENI:
+    Type: AWS::EC2::NetworkInterface
+    DependsOn: SecurityGroup
+    Properties:
+      SourceDestCheck: false
+      GroupSet:
+      - !Ref SecurityGroup
+      SubnetId: !Ref MGTSubnet
+      PrivateIpAddress: 172.31.1.254
+      Tags:
+      - Key: Name
+        Value: PAN-MGT-ENI
+
+  #MGT ENI and EIP association
+  MGTENIAssociation:
+    Type: AWS::EC2::EIPAssociation
+    DependsOn:
+    - MGTEIP
+    - MGTENI
+    Properties:
+      AllocationId: !GetAtt MGTEIP.AllocationId
+      NetworkInterfaceId: !Ref MGTENI
+
+  #DMZ Subnet Creation
+  DMZSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      CidrBlock: 172.31.2.0/24
+      AvailabilityZone: us-east-1a   
+      Tags:
+      - Key: Name
+        Value: PAN-DMZ-SUBNET
+
+  #DMZ Subnet NACL Association
+  DMZNACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    DependsOn:
+    - DMZSubnet
+    - NACL
+    Properties:
+      SubnetId: !Ref DMZSubnet
+      NetworkAclId: !Ref NACL
+        
+  #DMZ Routing Table Creation      
+  DMZRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: PAN-DMZ-RT
+
+  #DMZ Subnet attachment to Public Routing Table
+  DMZSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DMZSubnet
+      RouteTableId: !Ref DMZRouteTable   
+
+  #DMZ ENI Creation  
+  DMZENI:
+    Type: AWS::EC2::NetworkInterface
+    DependsOn: SecurityGroup
+    Properties:
+      SourceDestCheck: false
+      GroupSet:
+      - !Ref SecurityGroup
+      SubnetId: !Ref DMZSubnet
+      PrivateIpAddress: 172.31.2.254
+      Tags:
+      - Key: Name
+        Value: PAN-DMZ-ENI
+
+  #DMZ Default Route Creation   
+  DMZDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DMZENI
+    Properties:
+      RouteTableId: !Ref DMZRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NetworkInterfaceId: !Ref DMZENI
+
+  #EC2 Firewall instance Role and Profile required for the S3 Bucket Access where the Bootstarp file are located.
+  PANec2BootstrapRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: PANec2BootstrapRolePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 's3:ListBucket'
+                Resource: !Sub 'arn:aws:s3:::${BootstrapS3BucketName}'
+              - Effect: Allow
+                Action: 's3:GetObject'
+                Resource: !Sub 'arn:aws:s3:::${BootstrapS3BucketName}/*'
+
+  PANec2BootstrapInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    DependsOn:
+    - PANec2BootstrapRole
+    Properties:
+      Path: /
+      Roles:
+        - !Ref PANec2BootstrapRole
+
+  #PAN FW EC2 Instance Creation
+  PANec2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+    - MGTENI
+    - PublicENI
+    - DMZENI
+    - PANec2BootstrapInstanceProfile
+    Properties:
+      InstanceType: m5.xlarge
+      IamInstanceProfile: !Ref PANec2BootstrapInstanceProfile
+      ImageId: !Ref FirewallAMI
+      BlockDeviceMappings:
+      - DeviceName : /dev/xvda
+        Ebs: 
+          VolumeType: gp2
+          DeleteOnTermination: true
+          VolumeSize: 60
+      KeyName: !Ref KeyName
+      SourceDestCheck: false
+      NetworkInterfaces:
+      - NetworkInterfaceId: !Ref MGTENI
+        DeviceIndex: 0
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - vmseries-bootstrap-aws-s3bucket=
+            - !Ref BootstrapS3BucketName
+      Tags:
+        - Key: Name
+          Value: PAN-FW
+
+  #Public ENI Attachment to PAN EC2 Instance
+  PublicENIAttachment:
+    DependsOn: PANec2Instance
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Properties:
+      InstanceId: !Ref PANec2Instance
+      NetworkInterfaceId: !Ref PublicENI
+      DeviceIndex: 1
+
+  #DMZ ENI Attachment to PAN EC2 Instance
+  DMZENIAttachment:
+    DependsOn: PANec2Instance
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Properties:
+      InstanceId: !Ref PANec2Instance
+      NetworkInterfaceId: !Ref DMZENI
+      DeviceIndex: 2
+
+  #WebServr Instance Creation.
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LinuxAMI
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      KeyName: !Ref KeyName
+      SubnetId: !Ref DMZSubnet
+      PrivateIpAddress: 172.31.2.80
+      UserData:
+        'Fn::Base64': 
+          !Sub |
+            #!/bin/bash
+            sleep 1000
+            yum update -y
+            yum install httpd -y
+            yum install php -y
+            service httpd start
+            chkconfig httpd on
+            cd /var/www/html
+            echo "<?php phpinfo(); ?>"  >  index.php
+      Tags:
+        - Key: Name
+          Value: PAN-WEBSERVER    
+
+#Output
+Outputs:   
+  MGTPublicIPFW:  
+    Description: The Management IP of the Firewall  
+    Value: !Ref MGTEIP
+  WebServerPublicIPFW:  
+    Description: The Web Server public IP 
+    Value: !Ref PublicEIP
