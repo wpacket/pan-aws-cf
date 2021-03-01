@@ -26,6 +26,5 @@ You will need the following before you get started:
 config/bootstrap.xml  
 config/init-cfg.txt  
 - The AMI for the Palo Alto Firewall & the Web Server Image ( You can get those in the AWS Market Place )  
+- The Firewall credentials set in the bootstrap file : admin / Paloalto123
 
-##Credentials
-If you use the bootstrap config file provided on this repository, the login & password for the firewall are admin / Paloalto123.
