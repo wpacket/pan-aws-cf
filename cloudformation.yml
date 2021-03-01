@@ -10,7 +10,7 @@ Parameters:
     Type: String
     Description: Choose the correct AMI for the LINUX WEB Server in the DMZ. 
   FirewallAMI:
-    Default: ami-0abc61a0479de46c2
+    Default: ami-0d92827251ebe231d
     Type: String
     Description: Choose the correct AMI for the Palo Alto Networks Firewall
   BootstrapS3BucketName:

@@ -27,4 +27,5 @@ config/bootstrap.xml
 config/init-cfg.txt  
 - The AMI for the Palo Alto Firewall & the Web Server Image ( You can get those in the AWS Market Place )  
 
-
+##Credentials
+If you use the bootstrap config file provided on this repository, the login & password for the firewall are admin / Paloalto123.
